@@ -1,0 +1,19 @@
+# basic example (included in project description)
+
+proc 0
+
+put xyz 5
+put bar 99
+put z 7
+sync
+get xyz
+get z
+get qw
+size
+
+proc 1
+
+put baz 1
+put stuff 2
+sync
+
