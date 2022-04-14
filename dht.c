@@ -5,7 +5,7 @@
  *
  * Implementation for distributed hash table (DHT).
  *
- * Name: 
+ * Name: Benjamin Huber
  *
  */
 
@@ -21,9 +21,18 @@ static int rank;
 
 int dht_init()
 {
-    local_init();
+    // This code is essentially copied from the Project Prompt.  It ensures
+    // that MPI is initialized in MPI_THREAD_MULTIPLE mode, to enable 
+    // multithreading with MPI.
+    int provided;
+    MPI_Init_thread(NULL, NULL, MPI_THREAD_MULTIPLE, &provided);
+    if (provided != MPI_THREAD_MULTIPLE) {
+        printf("ERROR: Cannot initialize MPI in THREAD_MULTIPLE mode.\n");
+        exit(EXIT_FAILURE);
+    }
 
-    rank = 0;
+    // This will assign each process their rank correctly.
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     return rank;
 }
 

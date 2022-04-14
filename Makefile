@@ -12,4 +12,4 @@ $(EXE): $(OBJS)
 	$(CC) $(CFLAGS) -c $<
 
 clean:
-	rm -f $(OBJS) $(EXE)
+	rm -f $(OBJS) $(EXE) dump-*.txt
