@@ -17,6 +17,9 @@
 /* ========================================================================== */
 /* ==========================MPI RELEVANT VARIABLES========================== */
 /* ========================================================================== */
+#define ACK_TAG 1234
+#define NORM_TAG 5213
+#define SIZE_TAG 2981
 
 /*
  * Private module variable: current process ID (MPI rank)
@@ -49,7 +52,7 @@ pthread_t server_pid;
  * An enum to identify the message type that I'm recieving.
  */
 typedef enum {
-    PUT = 0, GET, SIZE, SYNC, DONE, BADREQ
+    PUT = 0, GET, SIZE, SYNC, DONE, ACK, BADREQ
 } dst_message_type;
 
 /*
@@ -93,8 +96,31 @@ void* server_loop (void* arg)
 {
     dst_message_p *rcv_buffer = (dst_message_p*) malloc (sizeof (dst_message_p));
     while (done_count != nprocs) {
-        MPI_Recv (rcv_buffer, sizeof(dst_message_p), MPI_BYTE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv (rcv_buffer, sizeof(dst_message_p), MPI_BYTE, MPI_ANY_SOURCE, NORM_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         switch (rcv_buffer->mt) {
+            case PUT:
+            {
+                // Put the key and value into our local copy of the table.
+                local_put(rcv_buffer->key, rcv_buffer->value);
+
+                // Send back confirmation that we have done that.
+                dst_message_p ack_message;
+                ack_message.mt = ACK;
+                MPI_Send(&ack_message, sizeof(dst_message_p), MPI_BYTE, rcv_buffer->origin, ACK_TAG, MPI_COMM_WORLD);
+                break;
+            }
+            case GET:
+            {
+                // Get the value from our local copy of the table.
+                long get_result = local_get(rcv_buffer->key);
+
+                // Send back the results of that get.
+                dst_message_p response_message;
+                response_message.mt = ACK;
+                response_message.value = get_result;
+                MPI_Send(&response_message, sizeof(dst_message_p), MPI_BYTE, rcv_buffer->origin, ACK_TAG, MPI_COMM_WORLD);
+                break;
+            }
             case DONE:
                 done_count += 1;
                 break;
@@ -133,14 +159,50 @@ int dht_init()
     return rank;
 }
 
+/*
+ * This is pretty self-explanatory except for the fact that I essentially use a 
+ * MPI_Recv call as a wait for a go-ahead from the thread we pinged.
+ */
 void dht_put(const char *key, long value)
 {
-    local_put(key, value);
+    // Build our message
+    dst_message_p put_message;
+    put_message.mt = PUT;
+    put_message.value = value;
+    put_message.origin = rank;
+    // Load our key into our struct
+    strncpy (put_message.key, key, MAX_KEYLEN - 1);
+    
+    // Calculate the process to send it to
+    int dest = hash(key);
+    MPI_Send(&put_message, sizeof (dst_message_p), MPI_BYTE, dest, NORM_TAG, MPI_COMM_WORLD);
+
+    // We can just use the buffer we created to recieve our ack message.
+    MPI_Recv(&put_message, sizeof (dst_message_p), MPI_BYTE, dest, ACK_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 }
 
+/*
+ * Obviously if we are hashing our keys to determine where we put them, we can 
+ * hash our keys to determine where to find them, I make use of this assumption 
+ * throughout the program.
+ */
 long dht_get(const char *key)
 {
-    return local_get(key);
+    // Build our message
+    dst_message_p get_message;
+    get_message.mt = GET;
+    get_message.origin = rank;
+    // Load our key into our struct
+    strncpy (get_message.key, key, MAX_KEYLEN - 1);
+
+    // Calculate the process to find our key in
+    int dest = hash(key);
+    MPI_Send(&get_message, sizeof (dst_message_p), MPI_BYTE, dest, NORM_TAG, MPI_COMM_WORLD);
+
+    // We recieve our message from the requested thread.
+    MPI_Recv(&get_message, sizeof (dst_message_p), MPI_BYTE, dest, ACK_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    return get_message.value;
 }
 
 size_t dht_size()
@@ -148,9 +210,12 @@ size_t dht_size()
     return local_size();
 }
 
+/*
+ * In order to sync all we need to do is barrier.
+ */
 void dht_sync()
 {
-    // nothing to do in the serial version
+    MPI_Barrier(MPI_COMM_WORLD);
 }
 
 /*
@@ -170,11 +235,13 @@ void dht_destroy(FILE *output)
     dst_message_p done_message;
     done_message.mt = DONE;
     for (int i = 0; i < nprocs; i++) {
-        MPI_Send((void*) &done_message, sizeof(dst_message_p), MPI_BYTE, i, 0, MPI_COMM_WORLD);
+        MPI_Send((void*) &done_message, sizeof(dst_message_p), MPI_BYTE, i, NORM_TAG, MPI_COMM_WORLD);
     }
 
+    // Wait for our server thread to terminate.
     pthread_join(server_pid, NULL);
 
+    // Once our server thread has terminated, we can dump our output.
     local_destroy(output);
 
     MPI_Finalize();
