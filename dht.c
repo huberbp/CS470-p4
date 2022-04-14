@@ -121,6 +121,17 @@ void* server_loop (void* arg)
                 MPI_Send(&response_message, sizeof(dst_message_p), MPI_BYTE, rcv_buffer->origin, ACK_TAG, MPI_COMM_WORLD);
                 break;
             }
+            case SIZE:
+            {
+                long size = local_size();
+
+                // Send the results of size.
+                dst_message_p size_message;
+                size_message.mt = ACK;
+                size_message.value = size;
+                MPI_Send (&size_message, sizeof(dst_message_p), MPI_BYTE, rcv_buffer->origin, SIZE_TAG, MPI_COMM_WORLD);
+                break;
+            }
             case DONE:
                 done_count += 1;
                 break;
@@ -205,9 +216,29 @@ long dht_get(const char *key)
     return get_message.value;
 }
 
+/* 
+ * 
+ */
 size_t dht_size()
 {
-    return local_size();
+    // Build our message
+    dst_message_p size_request;
+    size_request.mt = SIZE;
+    size_request.origin = rank;
+
+    // Send requests to all processes
+    for (int i = 0; i < nprocs; i++) {
+        MPI_Send(&size_request, sizeof (dst_message_p), MPI_BYTE, i, NORM_TAG, MPI_COMM_WORLD);
+    }
+
+    size_t total = 0;
+    // Recieve requests from all processes and aggregate them
+    for (int i = 0; i < nprocs; i++) {
+        MPI_Recv(&size_request, sizeof (dst_message_p), MPI_BYTE, i, SIZE_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        total += size_request.value;
+    }
+
+    return total;
 }
 
 /*
